@@ -1,3 +1,6 @@
+// Data
+
+
 const api = axios.create({
     baseURL: 'https://api.themoviedb.org/3',
     headers: {
@@ -8,30 +11,96 @@ const api = axios.create({
     },
 });
 
+const movieIsLiked = (movie, button) => {
+    let likedMovies = likedMovieList();
+
+    if(likedMovies[movie.id]) {
+        button.classList.add('movie-bttn--liked');
+        button.classList.add('movie-bttn');
+    } else {
+        button.classList.remove('movie-bttn--liked');
+        button.classList.add('movie-bttn');
+    } 
+}
+
+const likedMovieList = () => {
+    const item = JSON.parse(localStorage.getItem('liked_movies'));
+    let movies;
+
+    if (item) {
+        movies = item;
+    } else {
+        movies = {};
+    }
+
+    return movies;
+}
+
+const likeMovie = (movie) => {
+    let likedMovies = likedMovieList();
+
+    if(likedMovies[movie.id]) {
+        likedMovies[movie.id] = undefined;
+    } else {
+        likedMovies[movie.id] = movie;    
+    } 
+    localStorage.setItem('liked_movies', JSON.stringify(likedMovies));
+    if (location.hash == ''){
+        getLikedMovies();
+        getTrendingMoviesPreview();      
+    }
+}
+
 const POSTER_300W_URL = 'https://image.tmdb.org/t/p/w300/';
 const POSTER_500W_URL = 'https://image.tmdb.org/t/p/w500/';
 
 // Utils
 
-const printMoviePosters = (movies, section) => {
-    section.innerHTML = "";
+const lazyLoader = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+        if (entry.isIntersecting) {
+            const url = entry.target.getAttribute('data-img');
+            entry.target.setAttribute('src', url);
+        }
+    })
+})
 
+const printMoviePosters = (movies, section, lazyLoad = false) => {
     movies.forEach(movie => {
         const movieContainer = document.createElement('div');
         movieContainer.classList.add('movie-container');
-        movieContainer.addEventListener('click', () => {
-            location.hash = `#movie=${movie.id}`;
-        })
+
 
         const movieImg = document.createElement('img');
         movieImg.classList.add('movie-img');
         movieImg.setAttribute('alt', movie.title);
         movieImg.setAttribute(
-            'src',
+            lazyLoad ? 'data-img' : 'src',
             `${POSTER_300W_URL}${movie.poster_path}`
-        );  
+        );
+        movieImg.addEventListener('click', () => {
+            location.hash = `#movie=${movie.id}`;
+        });
+        movieImg.addEventListener('error', () => {
+            movieImg.setAttribute('src', 
+            `https://via.placeholder.com/300x450/5c218a/ffffff?text=${movie.title}`)
+        });
+
+        const movieBttn = document.createElement('button');
+        movieBttn.classList.add('movie-bttn');
+        likedMovieList()[movie.id] && movieBttn.classList.add('movie-bttn--liked');
+        movieBttn.addEventListener('click', () => {
+            likeMovie(movie);
+            movieBttn.classList.toggle('movie-bttn--liked');
+        });
+
+        if (lazyLoad) {
+            lazyLoader.observe(movieImg)
+        };
+        
 
         movieContainer.appendChild(movieImg);
+        movieContainer.appendChild(movieBttn);
         section.appendChild(movieContainer);
     });
 }
@@ -63,26 +132,64 @@ const printCategories = (categories, section) => {
 const printSimilarMovies = async (movieId, section) => {
     const { data } = await api(`/movie/${movieId}/similar`);
     const movies = data.results;
-    console.log(movies);
 
-    printMoviePosters(movies, section)
+    relatedMoviesContainer.innerHTML = "";
+    printMoviePosters(movies, section, true)
 }
- 
-//
 
-const getTrendingMovies = async () => {
+async function getPaginatedMovies(
+    endPoint, 
+    {
+        categoryId, 
+        query
+    } = {},
+    ) {
+    const { 
+        scrollTop, 
+        scrollHeight, 
+        clientHeight 
+    } = document.documentElement;
+
+    const scrollAtBottom = (scrollTop + clientHeight) >= (scrollHeight - 15);
+    const pageIsNotMax = page < maxPage;
+
+    if (scrollAtBottom && pageIsNotMax) {
+        page++;
+
+        const { data } = await api(endPoint, {
+            params: {
+                page,
+                with_genres: categoryId,
+                query,
+            },
+        });
+        const movies = data.results;
+
+        printMoviePosters(movies, genericSection, true);
+    } else if (scrollAtBottom && !pageIsNotMax) {
+        maxPageReached.classList.remove('inactive');
+    };
+}
+
+// API
+
+async function getTrendingMovies () {
     const { data } = await api('/trending/movie/day');
     const movies = data.results;
+    maxPage = data.total_pages;
 
-    printMoviePosters(movies, genericSection);
+    printMoviePosters(movies, genericSection, true);
+}
+
+function getPaginatedTrendingMovies() {
+    getPaginatedMovies('/trending/movie/day');
 }
 
 const getTrendingMoviesPreview = async () => {
     const { data } = await api('/trending/movie/day');
     const movies = data.results;
-    console.log(movies);
-
-    printMoviePosters(movies, trendingMoviesPreviewList);
+    trendingMoviesPreviewList.innerHTML = "";
+    printMoviePosters(movies, trendingMoviesPreviewList, true);
 }
 
 const getMoviesByCategory = async (categoryId) => {
@@ -90,11 +197,17 @@ const getMoviesByCategory = async (categoryId) => {
         params: {
             with_genres: categoryId,
         },
-    }
-    );
+    });
     const movies = data.results;
+    maxPage = data.total_pages;
 
-    printMoviePosters(movies, genericSection);
+    printMoviePosters(movies, genericSection, true);
+}
+
+function getPaginatedMoviesByCategory(categoryId) {
+    return function () {
+        getPaginatedMovies('/discover/movie', {categoryId});
+    }
 }
 
 const getMoviesBySearch = async (query) => {
@@ -105,14 +218,24 @@ const getMoviesBySearch = async (query) => {
     }
     );
     const movies = data.results;
+    maxPage = data.total_pages;
 
-    printMoviePosters(movies, genericSection);
+    printMoviePosters(movies, genericSection, true);
+}
+
+function getPaginatedMoviesBySearch(query) {
+    return function () {
+        getPaginatedMovies('/search/movie', {undefined, query});
+    }
 }
 
 const getCategoriesPreview = async () => {
-    const { data } = await api('/genre/movie/list');
+    const { data } = await api('/genre/movie/list', {
+        params: {
+            'language': lang,
+        }
+    });
     const categories = data.genres;
-    console.log(categories);
 
     printCategories(categories, categoriesPreviewList);
 }
@@ -121,7 +244,6 @@ const getMovieDetail = async (movieId) => {
     const { data: movie } = await api(`/movie/${movieId}`);
 
     const movieImgUrl = `${POSTER_500W_URL}${movie.poster_path}`;
-    console.log(movieImgUrl);
     headerSection.style.background =
         `linear-gradient(
             180deg, 
@@ -137,5 +259,8 @@ const getMovieDetail = async (movieId) => {
     printSimilarMovies(movieId, relatedMoviesContainer)
 }
 
-
-
+const getLikedMovies = () => {
+    likedMoviesScroll.innerHTML = "";
+    let likedMovies = Object.values(likedMovieList());
+    printMoviePosters(likedMovies, likedMoviesScroll, true);
+}
